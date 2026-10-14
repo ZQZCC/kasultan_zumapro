@@ -1,0 +1,84 @@
+diff --git a/fs/stat.c b/fs/stat.c
+index ef50573..6e09ded 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -427,6 +427,15 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+ 	return cp_new_stat(&stat, statbuf);
+ }
+ 
++#ifdef CONFIG_KSU
++extern void ksu_handle_newfstat_ret(unsigned int *fd,
++				    struct stat __user **statbuf_ptr);
++#if defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_COMPAT_STAT64)
++extern void ksu_handle_fstat64_ret(unsigned long *fd,
++				   struct stat64 __user **statbuf_ptr);
++#endif
++#endif
++
+ #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
+ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+ 		struct stat __user *, statbuf, int, flag)
+@@ -449,6 +458,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+ 	if (!error)
+ 		error = cp_new_stat(&stat, statbuf);
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_newfstat_ret(&fd, &statbuf);
++#endif
+ 	return error;
+ }
+ #endif
+@@ -576,6 +588,9 @@ SYSCALL_DEFINE2(fstat64, unsigned long, fd, struct stat64 __user *, statbuf)
+ 	if (!error)
+ 		error = cp_new_stat64(&stat, statbuf);
+ 
++#ifdef CONFIG_KSU
++	ksu_handle_fstat64_ret(&fd, &statbuf);
++#endif
+ 	return error;
+ }
+ 
+diff --git a/security/security.c b/security/security.c
+index 44226d7..779b39e 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -863,10 +863,19 @@ int security_bprm_creds_from_file(struct linux_binprm *bprm, struct file *file)
+ 	return call_int_hook(bprm_creds_from_file, 0, bprm, file);
+ }
+ 
++#ifdef CONFIG_KSU
++extern int ksu_bprm_check(struct linux_binprm *bprm);
++extern int ksu_file_permission(struct file *file, int mask);
++extern int ksu_hide_setprocattr(const char *name, void *value, size_t size);
++#endif
++
+ int security_bprm_check(struct linux_binprm *bprm)
+ {
+ 	int ret;
+ 
++#ifdef CONFIG_KSU
++	ksu_bprm_check(bprm);
++#endif
+ 	ret = call_int_hook(bprm_check_security, 0, bprm);
+ 	if (ret)
+ 		return ret;
+@@ -1532,6 +1541,9 @@ int security_file_permission(struct file *file, int mask)
+ {
+ 	int ret;
+ 
++#ifdef CONFIG_KSU
++	ksu_file_permission(file, mask);
++#endif
+ 	ret = call_int_hook(file_permission, 0, file, mask);
+ 	if (ret)
+ 		return ret;
+@@ -2116,6 +2128,9 @@ int security_setprocattr(const char *lsm, const char *name, void *value,
+ {
+ 	struct security_hook_list *hp;
+ 
++#ifdef CONFIG_KSU
++	ksu_hide_setprocattr(name, value, size);
++#endif
+ 	hlist_for_each_entry(hp, &security_hook_heads.setprocattr, list) {
+ 		if (lsm != NULL && strcmp(lsm, hp->lsm))
+ 			continue;

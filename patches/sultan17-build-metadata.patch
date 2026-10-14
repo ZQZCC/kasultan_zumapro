@@ -1,0 +1,86 @@
+diff --git a/Makefile b/Makefile
+index 5d9dcba..aeab4ac 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1370,8 +1370,7 @@ endif
+ $(sort $(KBUILD_LDS) $(KBUILD_VMLINUX_OBJS) $(KBUILD_VMLINUX_LIBS)): . ;
+ 
+ filechk_kernel.release = \
+-	echo "$(KERNELVERSION)$$($(CONFIG_SHELL) $(srctree)/scripts/setlocalversion \
+-		$(srctree) $(BRANCH) $(KMI_GENERATION))"
++	echo "6.1.162-android14-11-g9dd05ae3a1de-ab16261587"
+ 
+ # Store (new) KERNELRELEASE string in include/config/kernel.release
+ include/config/kernel.release: FORCE
+diff --git a/arch/arm64/configs/zumapro_defconfig b/arch/arm64/configs/zumapro_defconfig
+index dd0aefb..49fa19b 100644
+--- a/arch/arm64/configs/zumapro_defconfig
++++ b/arch/arm64/configs/zumapro_defconfig
+@@ -1,4 +1,4 @@
+-CONFIG_LOCALVERSION="-Sultan"
++CONFIG_LOCALVERSION=""
+ # CONFIG_LOCALVERSION_AUTO is not set
+ CONFIG_IRQ_SBALANCE=y
+ CONFIG_SBALANCE_EXCLUDE_CPUS="3,6,7"
+diff --git a/init/Makefile b/init/Makefile
+index 8316c23..5b679f2 100644
+--- a/init/Makefile
++++ b/init/Makefile
+@@ -28,8 +28,8 @@ preempt-flag-$(CONFIG_PREEMPT_BUILD)	:= PREEMPT
+ preempt-flag-$(CONFIG_PREEMPT_DYNAMIC)	:= PREEMPT_DYNAMIC
+ preempt-flag-$(CONFIG_PREEMPT_RT)	:= PREEMPT_RT
+ 
+-build-version = $(or $(KBUILD_BUILD_VERSION), $(build-version-auto))
+-build-timestamp = $(or $(KBUILD_BUILD_TIMESTAMP), $(build-timestamp-auto))
++build-version = 1
++build-timestamp = "Thu Sep  3 03:59:00 UTC 2026"
+ 
+ # Maximum length of UTS_VERSION is 64 chars
+ filechk_uts_version = \
+diff --git a/kernel/sys.c b/kernel/sys.c
+index cc55f4d..73429f8 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -1301,27 +1301,10 @@ static int override_release(char __user *release, size_t len)
+ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
+ {
+ 	struct new_utsname tmp;
+-	struct task_struct *t;
+-	bool is_gms = false;
+ 
+ 	down_read(&uts_sem);
+ 	memcpy(&tmp, utsname(), sizeof(tmp));
+ 	up_read(&uts_sem);
+-
+-	rcu_read_lock();
+-	for_each_thread(current, t) {
+-		if (thread_group_leader(t)) {
+-			is_gms = !strcmp(t->comm, "id.gms.unstable");
+-			break;
+-		}
+-	}
+-	rcu_read_unlock();
+-
+-	if (is_gms)
+-		snprintf(tmp.release, sizeof(tmp.release), "%u.%u.%u",
+-			 LINUX_VERSION_MAJOR, LINUX_VERSION_PATCHLEVEL,
+-			 LINUX_VERSION_SUBLEVEL);
+-
+ 	if (copy_to_user(name, &tmp, sizeof(tmp)))
+ 		return -EFAULT;
+ 
+diff --git a/scripts/mkcompile_h b/scripts/mkcompile_h
+index 2596f78..dcc5e4b 100644
+--- a/scripts/mkcompile_h
++++ b/scripts/mkcompile_h
+@@ -21,7 +21,7 @@ LD_VERSION=$(LC_ALL=C $LD -v | head -n1 |
+ 
+ cat <<EOF
+ #define UTS_MACHINE		"${UTS_MACHINE}"
+-#define LINUX_COMPILE_BY	"${LINUX_COMPILE_BY}"
+-#define LINUX_COMPILE_HOST	"${LINUX_COMPILE_HOST}"
+-#define LINUX_COMPILER		"${CC_VERSION}, ${LD_VERSION}"
++#define LINUX_COMPILE_BY	"build-user"
++#define LINUX_COMPILE_HOST	"build-host"
++#define LINUX_COMPILER		"Android (10087095, +pgo, +bolt, +lto, -mlgo, based on r487747c) clang version 17.0.2 (https://android.googlesource.com/toolchain/llvm-project d9f89f4d16663d5012e5c09495f3b30ece3d2362), LLD 17.0.2"
+ EOF

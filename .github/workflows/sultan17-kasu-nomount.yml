@@ -1,0 +1,237 @@
+name: Build Sultan17 + KaSU + NoMount
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SOURCE_REPO: https://github.com/ZQZCC/android_kernel_google_tensynos.git
+  SOURCE_BRANCH: 17.0.0-cp3a-lts
+  ANYKERNEL_REPO: https://github.com/Ante0/AnyKernel3.git
+  ANYKERNEL_BRANCH: sultan-17-zumapro
+  KSU_REPO: ZQZCC/KaSU
+  KSU_BRANCH: master
+  NOMOUNT_REPO: ZQZCC/nomount
+  NOMOUNT_BRANCH: my
+  GCC_VERSION: "15.3.rel1"
+  DEFAULT_TCP_CONG: bbr3
+  # DEFAULT_TCP_CONG: cubic
+
+jobs:
+  build:
+    name: Build Sultan17 zumapro Manual Hooks BBRv3 Kernel
+    runs-on: ubuntu-latest
+    env:
+      HOSTCFLAGS: -Wno-error=discarded-qualifiers
+    outputs:
+      ksu_ver: ${{ steps.meta.outputs.ksu_ver }}
+      s_tag: ${{ steps.meta.outputs.s_tag }}
+      s_rev: ${{ steps.meta.outputs.s_rev }}
+      nomount_rev: ${{ steps.meta.outputs.nomount_rev }}
+      nomount_tag: ${{ steps.meta.outputs.nomount_tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install GCC
+        run: |
+          ARCHIVE="arm-gnu-toolchain-${{ env.GCC_VERSION }}-x86_64-aarch64-none-linux-gnu.tar.xz"
+          URL="https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/${{ env.GCC_VERSION }}/${ARCHIVE}"
+
+          wget -q "$URL" -O "$ARCHIVE"
+          tar -xf "$ARCHIVE"
+          CROSS_COMPILE="$GITHUB_WORKSPACE/arm-gnu-toolchain-${{ env.GCC_VERSION }}-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
+          echo "CROSS_COMPILE=$CROSS_COMPILE" >> "$GITHUB_ENV"
+          echo "CC=${CROSS_COMPILE}gcc" >> "$GITHUB_ENV"
+
+      - name: Clone Source
+        run: |
+          git clone --depth=1 "${{ env.SOURCE_REPO }}" -b "${{ env.SOURCE_BRANCH }}" sultan
+          git clone --depth=1 "${{ env.ANYKERNEL_REPO }}" -b "${{ env.ANYKERNEL_BRANCH }}" AK3
+
+      - name: KSU & Patches
+        working-directory: sultan
+        run: |
+          curl -fLSs "https://raw.githubusercontent.com/${{ env.KSU_REPO }}/${{ env.KSU_BRANCH }}/kernel/setup.sh" | bash -s -- "${{ env.KSU_BRANCH }}"
+          git apply ../patches/sultan17-build-metadata.patch \
+            ../patches/gcc15-init-rodata-sultan17.patch \
+            ../patches/bbrv3-sultan17-6.1.patch
+
+      - name: Metadata
+        id: meta
+        run: |
+          S_TAG="${{ env.SOURCE_BRANCH }}"
+          S_REV=$(git -C sultan rev-parse HEAD)
+          K_VER=$((30000 + $(git -C sultan/KernelSU rev-list --count HEAD) - 84))
+          NOMOUNT_REV=$(git ls-remote --exit-code "https://github.com/${{ env.NOMOUNT_REPO }}.git" "refs/heads/${{ env.NOMOUNT_BRANCH }}" | cut -f1)
+          NOMOUNT_TAG=$(curl -fLSs "https://raw.githubusercontent.com/${{ env.NOMOUNT_REPO }}/$NOMOUNT_REV/module/module.prop" | sed -n 's/^version=//p' | tr -d '\r' | head -n1)
+          NOMOUNT_TAG=${NOMOUNT_TAG:-untagged}
+          echo "ksu_ver=$K_VER" >> "$GITHUB_OUTPUT"
+          echo "s_tag=$S_TAG" >> "$GITHUB_OUTPUT"
+          echo "s_rev=$S_REV" >> "$GITHUB_OUTPUT"
+          echo "nomount_rev=$NOMOUNT_REV" >> "$GITHUB_OUTPUT"
+          echo "nomount_tag=$NOMOUNT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Integrate NoMount
+        working-directory: sultan
+        run: |
+          NOMOUNT_BASE="https://raw.githubusercontent.com/${{ env.NOMOUNT_REPO }}/${{ steps.meta.outputs.nomount_rev }}"
+          curl -fLSs "$NOMOUNT_BASE/kernel/setup.sh" | bash -s -- "${{ steps.meta.outputs.nomount_rev }}"
+
+      - name: Apply KaSU Manual Hooks
+        working-directory: sultan
+        run: |
+          git apply ../patches/kasu-manual-hooks-sultan17-6.1.patch
+
+      - name: Inject Configuration
+        working-directory: sultan
+        run: |
+          make O=out CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" HOSTCFLAGS="$HOSTCFLAGS" zumapro_defconfig
+
+          enable_configs=(
+            # BBRv3 with FQ
+            TCP_CONG_ADVANCED
+            TCP_CONG_BBR3
+            NET_SCH_FQ
+            # NoMount and KaSU
+            NOMOUNT
+            KSU
+            KSU_TINYFS_SUCOMPAT
+            KSU_TINYFS_NO_SETUID
+            KSU_TINYFS_PKG_OBSERVER
+          )
+          disable_configs=(
+            BPF_STREAM_PARSER
+            INET_IPCOMP
+            XFRM_SUB_POLICY
+            TCP_CONG_BIC
+            TCP_CONG_WESTWOOD
+            TCP_CONG_HTCP
+            DEFAULT_BBR
+            KSU_DEBUG
+          )
+
+          for config in "${enable_configs[@]}"; do
+            scripts/config --file out/.config --enable "$config"
+          done
+          for config in "${disable_configs[@]}"; do
+            scripts/config --file out/.config --disable "$config"
+          done
+          case "$DEFAULT_TCP_CONG" in
+            bbr3)
+              default_cong_config=DEFAULT_BBR3
+              alternate_cong_config=DEFAULT_CUBIC
+              ;;
+            cubic)
+              default_cong_config=DEFAULT_CUBIC
+              alternate_cong_config=DEFAULT_BBR3
+              ;;
+            *)
+              echo "::error::Unsupported DEFAULT_TCP_CONG: $DEFAULT_TCP_CONG"
+              exit 1
+              ;;
+          esac
+          scripts/config --file out/.config --disable "$alternate_cong_config"
+          scripts/config --file out/.config --enable "$default_cong_config"
+          scripts/config --file out/.config --set-val LOG_BUF_SHIFT 21
+
+          make O=out CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" HOSTCFLAGS="$HOSTCFLAGS" olddefconfig
+
+          for config in "${enable_configs[@]}" "$default_cong_config"; do
+            if ! grep -q "^CONFIG_${config}=y$" out/.config; then
+              echo "::error::Required kernel option CONFIG_${config}=y was not resolved"
+              exit 1
+            fi
+          done
+          for config in "${disable_configs[@]}" "$alternate_cong_config"; do
+            if grep -Eq "^CONFIG_${config}=(y|m)$" out/.config; then
+              echo "::error::Kernel option CONFIG_${config} was unexpectedly enabled"
+              exit 1
+            fi
+          done
+          grep -q "^CONFIG_DEFAULT_TCP_CONG=\"${DEFAULT_TCP_CONG}\"$" out/.config || {
+            echo "::error::$DEFAULT_TCP_CONG was not resolved as the default TCP congestion control"
+            exit 1
+          }
+
+      - name: Build Kernel
+        working-directory: sultan
+        env:
+          KBUILD_BUILD_USER: build-user
+          KBUILD_BUILD_HOST: build-host
+        run: |
+          make O=out CROSS_COMPILE="$CROSS_COMPILE" CC="$CC" HOSTCFLAGS="$HOSTCFLAGS" -j"$(nproc --all)"
+
+      - name: Package
+        run: |
+          cp sultan/out/arch/arm64/boot/Image.lz4 AK3/Image.lz4
+          cat sultan/out/google-devices/zumapro/dts/*.dtb > AK3/dtb
+          ZIP_NAME="Sultan17-zumapro-KaSU-${{ steps.meta.outputs.ksu_ver }}-NoMount-BBRv3.zip"
+          ( cd AK3 && zip -r9 "../$ZIP_NAME" . -x "*.git*" )
+          echo "ZIP_PATH=$PWD/$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: Sultan17-zumapro-kasu-nomount-bbrv3
+          path: ${{ env.ZIP_PATH }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sultan-zumapro-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: Sultan17-zumapro-kasu-nomount-bbrv3
+          path: ./artifacts
+      - name: Tag and Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KSU_VER: ${{ needs.build.outputs.ksu_ver }}
+          S_TAG: ${{ needs.build.outputs.s_tag }}
+          S_REV: ${{ needs.build.outputs.s_rev }}
+          NOMOUNT_REV: ${{ needs.build.outputs.nomount_rev }}
+          NOMOUNT_TAG: ${{ needs.build.outputs.nomount_tag }}
+        run: |
+          ZIP_FILE="artifacts/Sultan17-zumapro-KaSU-$KSU_VER-NoMount-BBRv3.zip"
+
+          DATE=$(date +"%Y.%m.%d")
+          MAX_REV=$(git tag -l "${DATE}-r*" | sed "s/${DATE}-r//" | sort -n | tail -n1)
+          REV=$(( ${MAX_REV:-0} + 1 ))
+          TAG="${DATE}-r${REV}"
+
+          cat > release-notes.md <<EOF
+          ### Build Information
+
+          | Component | Details |
+          | :--- | :--- |
+          | **Base** | [\`$S_TAG\`](${SOURCE_REPO%.git}/commit/$S_REV) |
+          | **Manager** | [KaSU](https://github.com/ZQZCC/KaSU) |
+          | **Driver** | \`$KSU_VER\` |
+          | **NoMount** | [\`$NOMOUNT_TAG\`](https://github.com/${{ env.NOMOUNT_REPO }}/commit/$NOMOUNT_REV) |
+          | **Hook** | \`Full manual\` |
+          | **Compiler** | \`$GCC_VERSION\` |
+
+          ### Networking
+
+          - **TCP:** $DEFAULT_TCP_CONG default with FQ
+
+          EOF
+
+          gh release create "$TAG" "$ZIP_FILE" \
+            --target "$GITHUB_SHA" \
+            --title "Sultan17 Kernel Build - $TAG" \
+            --notes-file release-notes.md

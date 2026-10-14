@@ -1,0 +1,13 @@
+diff --git a/include/linux/init.h b/include/linux/init.h
+index c60e344..3dd21f5 100644
+--- a/include/linux/init.h
++++ b/include/linux/init.h
+@@ -321,7 +321,7 @@ struct obs_kernel_param {
+  * obs_kernel_param "array" too far apart in .init.setup.
+  */
+ #define __setup_param(str, unique_id, fn, early)			\
+-	static const char __setup_str_##unique_id[] __initconst		\
++	static const char __setup_str_##unique_id[] __section(".init.rodata.str") \
+ 		__aligned(1) = str; 					\
+ 	static struct obs_kernel_param __setup_##unique_id		\
+ 		__used __section(".init.setup")				\
